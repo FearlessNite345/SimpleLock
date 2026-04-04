@@ -1,0 +1,51 @@
+messages:
+  display_type: chat # chat, action_bar, bossbar, none
+
+  chest_attach_denied: "&cYou cannot attach a chest to someone else's protected chest."
+  chest_protected: "&aChest protected."
+  chest_denied: "&cThis chest is protected."
+  sign_denied: "&cYou cannot edit this protection sign."
+  chest_break_denied: "&cYou cannot break this protected chest."
+  sign_break_denied: "&cYou cannot break this protection sign."
+  gui_no_target: "&cLook at a protected chest first."
+  gui_not_owner: "&cYou must own this protected chest to manage its whitelist."
+  gui_player_added: "&aAdded &e%player% &ato the whitelist."
+  gui_player_removed: "&cRemoved &e%player% &cfrom the whitelist."
+  no_permission: "&cYou do not have permission."
+  config_reloaded: "&aSimpleLock config reloaded."
+  economy_not_enough: "&cYou need &6$%amount% &cto protect this chest."
+  economy_paid: "&aYou paid &6$%amount% &ato protect this chest."
+
+logging:
+  debug:
+    protection_create: false
+    access_denied: false
+    bypass_use: false
+    trust_changes: false
+    hopper_denied: false
+    explosions: false
+    economy: false
+
+towny:
+  enabled: false
+  mayor_bypass_open: false
+  mayor_bypass_break: false
+  nation_leader_bypass_open: false
+  nation_leader_bypass_break: false
+
+protection:
+  hopper_protection:
+    enabled: true
+  explosion_protection:
+    enabled: false
+
+economy:
+  enabled: false
+  protect_cost: 0.0
+  charge_on:
+    sign_create: true
+  refund_on_unprotect: false
+
+gui:
+  enabled: true
+  whitelist_title: "&8Whitelist Players"

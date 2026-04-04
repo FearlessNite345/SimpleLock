@@ -1,0 +1,20 @@
+name: SimpleLock
+version: 1.0.0
+main: me.fearlessstudios.simplelock.SimpleLockPlugin
+api-version: '1.21'
+author: FearlessStudios
+softdepend: [Towny, Vault]
+
+commands:
+  simplelock:
+    description: Main SimpleLock command
+    usage: /simplelock gui
+    aliases: [slock]
+
+permissions:
+  simplelock.admin:
+    description: Bypass all protections
+    default: op
+  simplelock.reload:
+    description: Reload SimpleLock config
+    default: op
