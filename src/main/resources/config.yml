@@ -7,6 +7,7 @@ messages:
   sign_denied: "&cYou cannot edit this protection sign."
   chest_break_denied: "&cYou cannot break this protected chest."
   sign_break_denied: "&cYou cannot break this protection sign."
+  chest_unprotected: "&aChest unprotected."
   gui_no_target: "&cLook at a protected chest first."
   gui_not_owner: "&cYou must own this protected chest to manage its whitelist."
   gui_player_added: "&aAdded &e%player% &ato the whitelist."
@@ -49,3 +50,7 @@ economy:
 gui:
   enabled: true
   whitelist_title: "&8Whitelist Players"
+
+update_checker:
+  enabled: true
+  announce_to_admins: true

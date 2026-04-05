@@ -33,6 +33,7 @@ import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
@@ -48,6 +49,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 public final class SimpleLockPlugin extends JavaPlugin implements Listener, CommandExecutor, TabCompleter {
@@ -55,6 +57,10 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
     private static final BlockFace[] CARDINAL_FACES = {
             BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST
     };
+    private static final String PLUGIN_VERSION = "1.0.1";
+    private static final String MODRINTH_PROJECT_ID = "simplelock";
+    private static final String MODRINTH_LOADER = "paper";
+    private static final String MODRINTH_PROJECT_URL = "https://modrinth.com/plugin/simplelock";
 
     private NamespacedKey ownerUuidKey;
     private NamespacedKey ownerNameKey;
@@ -63,6 +69,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
 
     private TownyHook townyHook;
     private VaultHook vaultHook;
+    private volatile String latestAvailableVersion;
 
     @Override
     public void onEnable() {
@@ -76,21 +83,25 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         if (getConfig().getBoolean("towny.enabled", true)
                 && Bukkit.getPluginManager().getPlugin("Towny") != null) {
             townyHook = new TownyHook();
-            log("Towny detected, support enabled.");
+            log("Towny integration enabled.");
+        } else if (!getConfig().getBoolean("towny.enabled", true)) {
+            log("Towny integration disabled in config.");
         } else {
-            log("Towny not detected or disabled.");
+            log("Towny integration not enabled because Towny is not installed.");
         }
 
         if (getConfig().getBoolean("economy.enabled", false)
                 && Bukkit.getPluginManager().getPlugin("Vault") != null) {
             vaultHook = new VaultHook();
             if (vaultHook.isReady()) {
-                log("Vault detected, economy support enabled.");
+                log("Vault economy integration enabled.");
             } else {
-                log("Vault detected, but no economy provider was found.");
+                log("Vault was found, but no economy provider is registered.");
             }
+        } else if (!getConfig().getBoolean("economy.enabled", false)) {
+            log("Vault economy integration disabled in config.");
         } else {
-            log("Vault not detected or economy disabled.");
+            log("Vault economy integration not enabled because Vault is not installed.");
         }
 
         Bukkit.getPluginManager().registerEvents(this, this);
@@ -104,6 +115,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         }
 
         log("SimpleLock enabled.");
+        startUpdateCheck();
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -207,17 +219,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         if (!isProtect(sign)) {
             return;
         }
-
-        String owner = sign.getPersistentDataContainer().get(ownerUuidKey, PersistentDataType.STRING);
-        if (owner == null) {
-            return;
-        }
-
         Player player = event.getPlayer();
-        if (player.getUniqueId().toString().equals(owner) || player.hasPermission("simplelock.admin")) {
-            return;
-        }
-
         event.setCancelled(true);
         sendConfiguredMessage(player, getConfig().getString("messages.sign_denied"));
         logDebug("access_denied", player.getName() + " denied sign edit at " + formatLoc(sign.getBlock()));
@@ -240,13 +242,24 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
 
         if (block.getState() instanceof Sign sign && isProtect(sign)) {
             String owner = sign.getPersistentDataContainer().get(ownerUuidKey, PersistentDataType.STRING);
-            if (owner != null
-                    && !player.getUniqueId().toString().equals(owner)
-                    && !player.hasPermission("simplelock.admin")) {
+            boolean canBreakProtection = owner != null
+                    && (player.getUniqueId().toString().equals(owner) || player.hasPermission("simplelock.admin"));
+            if (!canBreakProtection) {
                 event.setCancelled(true);
                 sendConfiguredMessage(player, getConfig().getString("messages.sign_break_denied"));
                 logDebug("access_denied", player.getName() + " denied sign break at " + formatLoc(block));
+                return;
             }
+
+            Chest attachedChest = getAttachedChest(sign);
+            clearProtection(sign);
+
+            if (attachedChest != null) {
+                unprotectChest(attachedChest);
+            }
+
+            sendConfiguredMessage(player, getConfig().getString("messages.chest_unprotected"));
+            logDebug("protection_create", player.getName() + " unprotected chest at " + formatLoc(block));
         }
     }
 
@@ -330,6 +343,37 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         }
     }
 
+    @EventHandler
+    public void onJoin(PlayerJoinEvent event) {
+        if (!getConfig().getBoolean("update_checker.announce_to_admins", true)) {
+            return;
+        }
+
+        if (latestAvailableVersion == null) {
+            return;
+        }
+
+        Player player = event.getPlayer();
+        if (!player.hasPermission("simplelock.admin") && !player.isOp()) {
+            return;
+        }
+
+        Bukkit.getScheduler().runTaskLater(this, () ->
+                {
+                    player.sendMessage(Component.text(
+                            "[SimpleLock]: New update available: " + latestAvailableVersion
+                                    + " | Current version: " + PLUGIN_VERSION,
+                            NamedTextColor.YELLOW
+                    ));
+                    player.sendMessage(Component.text(
+                            "[SimpleLock]: Download it here: " + MODRINTH_PROJECT_URL,
+                            NamedTextColor.GOLD
+                    ));
+                },
+                40L
+        );
+    }
+
     @EventHandler(ignoreCancelled = true)
     public void onBlockExplode(BlockExplodeEvent event) {
         if (getConfig().getBoolean("protection.explosion_protection.enabled", false)) {
@@ -356,13 +400,11 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
             return;
         }
 
-        if (!(event.getInventory().getHolder() instanceof TrustGuiHolder holder)) {
+        if (!(event.getInventory().getHolder() instanceof TrustGuiHolder(Location location))) {
             return;
         }
 
         event.setCancelled(true);
-
-        Location location = holder.location();
         if (!(location.getBlock().getState() instanceof Chest chest)) {
             return;
         }
@@ -452,6 +494,8 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
             }
 
             reloadConfig();
+            latestAvailableVersion = null;
+            startUpdateCheck();
             sendConfiguredMessage(player, getConfig().getString("messages.config_reloaded"));
         }
 
@@ -619,6 +663,29 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         chest.update();
     }
 
+    private void unprotectChest(Chest chest) {
+        InventoryHolder holder = chest.getInventory().getHolder();
+
+        if (holder instanceof DoubleChest dc) {
+            if (dc.getLeftSide() instanceof Chest left) {
+                clearChestData(left);
+            }
+            if (dc.getRightSide() instanceof Chest right) {
+                clearChestData(right);
+            }
+        } else {
+            clearChestData(chest);
+        }
+    }
+
+    private void clearChestData(Chest chest) {
+        PersistentDataContainer pdc = chest.getPersistentDataContainer();
+        pdc.remove(ownerUuidKey);
+        pdc.remove(ownerNameKey);
+        pdc.remove(trustedPlayersKey);
+        chest.update();
+    }
+
     private void applyTrustedToChest(Chest chest, Set<UUID> trustedPlayers) {
         ProtectionData data = getData(chest);
         if (data != null) {
@@ -631,6 +698,14 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         pdc.set(ownerUuidKey, PersistentDataType.STRING, uuid);
         pdc.set(ownerNameKey, PersistentDataType.STRING, name);
         pdc.set(protectSignKey, PersistentDataType.BYTE, (byte) 1);
+        sign.update();
+    }
+
+    private void clearProtection(Sign sign) {
+        PersistentDataContainer pdc = sign.getPersistentDataContainer();
+        pdc.remove(ownerUuidKey);
+        pdc.remove(ownerNameKey);
+        pdc.remove(protectSignKey);
         sign.update();
     }
 
@@ -773,8 +848,49 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         return input == null ? null : input.replace("%" + key + "%", value);
     }
 
+    private void startUpdateCheck() {
+        if (!getConfig().getBoolean("update_checker.enabled", true)) {
+            log("Update checker disabled in config.");
+            return;
+        }
+
+        String gameVersion = getServer().getMinecraftVersion().trim();
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                String currentVersion = PLUGIN_VERSION;
+                String latestVersion = new ModrinthUpdateChecker().fetchLatestVersion(
+                        MODRINTH_PROJECT_ID,
+                        MODRINTH_LOADER,
+                        gameVersion
+                );
+                int comparison = ModrinthUpdateChecker.compareVersions(latestVersion, currentVersion);
+
+                if (comparison > 0) {
+                    latestAvailableVersion = latestVersion;
+                    log("New update available: " + latestVersion
+                            + " | Current version: " + currentVersion);
+                    log("Download it here: " + MODRINTH_PROJECT_URL);
+                } else {
+                    log("You are running the latest version: " + currentVersion);
+                }
+            } catch (Exception exception) {
+                log("Update check failed: " + exception.getMessage());
+            }
+        });
+    }
+
     private String plain(Component component) {
         return component == null ? "" : PlainTextComponentSerializer.plainText().serialize(component);
+    }
+
+    private Chest getAttachedChest(Sign sign) {
+        if (!(sign.getBlock().getBlockData() instanceof WallSign wallSign)) {
+            return null;
+        }
+
+        Block attached = sign.getBlock().getRelative(wallSign.getFacing().getOppositeFace());
+        return attached.getState() instanceof Chest chest ? chest : null;
     }
 
     private void log(String s) {
