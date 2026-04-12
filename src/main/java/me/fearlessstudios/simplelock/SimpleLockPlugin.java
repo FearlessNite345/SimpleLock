@@ -77,7 +77,6 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
     private static final BlockFace[] CARDINAL_FACES = {
             BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST
     };
-    private static final String PLUGIN_VERSION = "1.1.0";
     private static final double CONFIG_VERSION = 1.0D;
     private static final String MODRINTH_PROJECT_ID = "simplelock";
     private static final String[] MODRINTH_LOADERS = {"paper", "spigot"};
@@ -421,7 +420,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
                             && latestAvailableVersion != null) {
                         player.sendMessage(ChatColor.YELLOW
                                 + "[SimpleLock]: New update available: " + latestAvailableVersion
-                                + " | Current version: " + PLUGIN_VERSION);
+                                + " | Current version: " + SimpleLockMetadata.PLUGIN_VERSION);
                         player.sendMessage(ChatColor.GOLD
                                 + "[SimpleLock]: Download it here: " + MODRINTH_PROJECT_URL);
                     }
@@ -2403,7 +2402,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
 
         CompletableFuture.runAsync(() -> {
             try {
-                String currentVersion = PLUGIN_VERSION;
+                String currentVersion = SimpleLockMetadata.PLUGIN_VERSION;
                 String latestVersion = new ModrinthUpdateChecker().fetchLatestVersion(
                         MODRINTH_PROJECT_ID,
                         MODRINTH_LOADERS,

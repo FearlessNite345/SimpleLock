@@ -39,7 +39,7 @@ public final class ModrinthUpdateChecker {
         );
 
         HttpRequest request = HttpRequest.newBuilder(uri)
-                .header("User-Agent", "SimpleLock/1.1.0 (fearlessstudios)")
+                .header("User-Agent", SimpleLockMetadata.USER_AGENT)
                 .timeout(Duration.ofSeconds(15))
                 .GET()
                 .build();
