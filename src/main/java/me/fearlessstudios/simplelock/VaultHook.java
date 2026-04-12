@@ -27,4 +27,8 @@ public class VaultHook {
     public boolean withdraw(Player player, double amount) {
         return economy != null && economy.withdrawPlayer(player, amount).transactionSuccess();
     }
+
+    public boolean deposit(Player player, double amount) {
+        return economy != null && economy.depositPlayer(player, amount).transactionSuccess();
+    }
 }

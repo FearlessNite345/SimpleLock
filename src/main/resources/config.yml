@@ -1,40 +1,12 @@
-config_version: 1.0
+# Managed by SimpleLock. /simplelock updateconfig will update this when new defaults are merged.
+config_version: 1.1
 
+# Message display settings. Chat and command text now lives in lang.yml.
 messages:
-  display_type: chat # chat, action_bar, bossbar, none
+  # chat, action_bar, bossbar, none
+  display_type: chat
 
-  chest_attach_denied: "&cYou cannot attach a chest to someone else's protected chest."
-  chest_protected: "&aContainer protected."
-  chest_denied: "&cThis container is protected."
-  sign_denied: "&cYou cannot edit this protection sign."
-  chest_break_denied: "&cYou cannot break this protected container."
-  sign_break_denied: "&cYou cannot break this protection sign."
-  chest_unprotected: "&aContainer unprotected."
-  gui_no_target: "&cLook at a protected chest or barrel first."
-  gui_not_owner: "&cYou must own this protected container to manage its whitelist."
-  gui_player_added: "&aAdded &e%player% &ato the whitelist."
-  gui_player_removed: "&cRemoved &e%player% &cfrom the whitelist."
-  whitelist_usage: "&eUse &6/simplelock whitelist&e, &6/simplelock whitelist add <player>&e, or &6/simplelock whitelist remove <player>&e."
-  whitelist_owner_target: "&cYou cannot modify whitelist access for the owner."
-  whitelist_already_added: "&e%player% &cis already on the whitelist."
-  whitelist_not_added: "&e%player% &cis not on the whitelist."
-  player_not_found: "&cPlayer &e%player% &cwas not found."
-  transfer_usage: "&eUse &6/simplelock transfer <player> &ewhile looking at a protected container."
-  transfer_same_owner: "&e%player% &calready owns this protected container."
-  transfer_success: "&aTransferred protection to &e%player%&a."
-  no_permission: "&cYou do not have permission."
-  config_reloaded: "&aSimpleLock config reloaded."
-  config_outdated_admin: "&eSimpleLock config is outdated. Expected config_version &6%expected%&e but found &6%current%&e."
-  config_missing_paths_admin: "&eMissing config paths: &6%paths%"
-  config_update_hint: "&eUse &6/simplelock updateconfig &eto back up your current config and merge missing default settings."
-  config_update_no_changes: "&aConfig is already up to date."
-  config_update_success: "&aConfig updated. Backup created at &e%backup%&a. Added &e%count% &amissing setting(s)."
-  config_update_added_paths: "&eMerged paths: &6%paths%"
-  config_update_failed: "&cConfig update failed. Check console for details."
-  setting_updated: "&aUpdated &e%setting% &ato &e%value%&a."
-  economy_not_enough: "&cYou need &6$%amount% &cto protect this container."
-  economy_paid: "&aYou paid &6$%amount% &ato protect this container."
-
+# Debug logging is useful when testing protections or diagnosing admin reports.
 logging:
   debug:
     protection_create: false
@@ -47,6 +19,7 @@ logging:
     explosions: false
     economy: false
 
+# Optional Towny bypass integration.
 towny:
   enabled: false
   mayor_bypass_open: false
@@ -54,24 +27,42 @@ towny:
   nation_leader_bypass_open: false
   nation_leader_bypass_break: false
 
+# Optional GriefPrevention bypass integration.
+griefprevention:
+  enabled: false
+  container_trust_bypass_open: false
+  build_trust_bypass_break: false
+
+# Optional Lands bypass integration.
+lands:
+  enabled: false
+  interact_container_bypass_open: false
+  block_break_bypass_break: false
+
+# Core protection behavior.
 protection:
   hopper_protection:
     enabled: true
   explosion_protection:
     enabled: false
 
+# Economy settings apply when Vault and an economy provider are available.
+# If enabled, protect_cost is charged when a player creates a new protection sign.
 economy:
   enabled: false
+  # Base price charged to create a protection. Set to 0.0 to disable charges while keeping Vault hooked.
   protect_cost: 0.0
-  charge_on:
-    sign_create: true
+  # If true, owners get part of the current protect_cost back when removing their own protection.
   refund_on_unprotect: false
+  # Percentage of protect_cost returned on unprotect. Clamped to 0-100.
+  refund_percentage: 50.0
 
+# GUI behavior settings. Main GUI titles are in lang.yml.
 gui:
   enabled: true
-  whitelist_title: "&8Whitelist Players"
-  admin_title: "&8SimpleLock Settings"
 
+# Version checks only affect notifications; they do not auto-download updates.
 update_checker:
   enabled: true
+  # If true, admins are reminded in-game when a newer version is available.
   announce_to_admins: true

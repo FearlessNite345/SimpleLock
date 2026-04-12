@@ -8,6 +8,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -23,8 +24,13 @@ public final class ModrinthUpdateChecker {
                 .build();
     }
 
-    public String fetchLatestVersion(String projectId, String loader, String gameVersion) throws IOException, InterruptedException {
-        String encodedLoader = URLEncoder.encode("[\"" + loader + "\"]", StandardCharsets.UTF_8);
+    public String fetchLatestVersion(String projectId, String[] loaders, String gameVersion) throws IOException, InterruptedException {
+        String loaderJson = Arrays.stream(loaders)
+                .map(loader -> "\"" + loader + "\"")
+                .reduce((left, right) -> left + "," + right)
+                .map(joined -> "[" + joined + "]")
+                .orElse("[]");
+        String encodedLoader = URLEncoder.encode(loaderJson, StandardCharsets.UTF_8);
         String encodedGameVersion = URLEncoder.encode("[\"" + gameVersion + "\"]", StandardCharsets.UTF_8);
         URI uri = URI.create(
                 "https://api.modrinth.com/v2/project/" + projectId + "/version"
@@ -33,7 +39,7 @@ public final class ModrinthUpdateChecker {
         );
 
         HttpRequest request = HttpRequest.newBuilder(uri)
-                .header("User-Agent", "SimpleLock/1.0.1 (fearlessstudios)")
+                .header("User-Agent", "SimpleLock/1.1.0 (fearlessstudios)")
                 .timeout(Duration.ofSeconds(15))
                 .GET()
                 .build();

@@ -1,19 +1,20 @@
 name: SimpleLock
-version: 1.0.2
+version: 1.1.0
+description: Container protection plugin for Spigot, Paper, and Purpur servers
 main: me.fearlessstudios.simplelock.SimpleLockPlugin
 api-version: '1.21'
 author: FearlessStudios
-softdepend: [Towny, Vault]
+softdepend: [Towny, Vault, GriefPrevention, Lands]
 
 commands:
   simplelock:
     description: Main SimpleLock command
-    usage: /simplelock <whitelist|transfer|settings|reload|updateconfig>
+    usage: /simplelock <whitelist|transfer|info|forceunprotect|settings|reload|updateconfig>
     aliases: [slock]
 
 permissions:
   simplelock.admin:
-    description: Bypass all protections
+    description: Bypass all protections and use admin override commands
     default: op
   simplelock.settings:
     description: Open the SimpleLock settings GUI
