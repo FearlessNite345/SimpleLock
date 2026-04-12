@@ -78,7 +78,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
             BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST
     };
     private static final String PLUGIN_VERSION = "1.1.0";
-    private static final double CONFIG_VERSION = 1.1D;
+    private static final double CONFIG_VERSION = 1.0D;
     private static final String MODRINTH_PROJECT_ID = "simplelock";
     private static final String[] MODRINTH_LOADERS = {"paper", "spigot"};
     private static final String MODRINTH_PROJECT_URL = "https://modrinth.com/plugin/simplelock";
