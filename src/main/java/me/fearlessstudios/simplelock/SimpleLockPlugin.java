@@ -29,6 +29,7 @@ import org.bukkit.entity.minecart.HopperMinecart;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
@@ -38,6 +39,7 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
@@ -82,7 +84,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
     private static final String MODRINTH_PROJECT_URL = "https://modrinth.com/plugin/simplelock";
     private static final String[] DISPLAY_TYPES = {"chat", "action_bar", "bossbar", "none"};
     private static final int INFO_TRUSTED_PLAYER_SUMMARY_LIMIT = 6;
-    private static final int ADMIN_CONFIG_PATH_SUMMARY_LIMIT = 4;
+    private static final int ADMIN_FILE_PATH_SUMMARY_LIMIT = 4;
     private static final int ADMIN_SETTINGS_GUI_SIZE = 45;
     private static final int[] WHITELIST_PLAYER_SLOTS = {
             10, 11, 12, 13, 14, 15, 16,
@@ -105,10 +107,13 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
     private VaultHook vaultHook;
     private YamlConfiguration langConfig;
     private volatile String latestAvailableVersion;
+    private final Set<UUID> activeAdminBypassPlayers = new HashSet<>();
     private double loadedConfigVersion;
-    private boolean configOutdated;
+    private boolean managedFilesOutdated;
     private List<String> missingConfigPaths = List.of();
     private List<String> obsoleteConfigPaths = List.of();
+    private List<String> missingLangPaths = List.of();
+    private List<String> obsoleteLangPaths = List.of();
 
     @Override
     public void onEnable() {
@@ -120,7 +125,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         protectSignKey = new NamespacedKey(this, "protect_sign");
         trustedPlayersKey = new NamespacedKey(this, "trusted_players");
 
-        refreshConfigVersionState();
+        refreshManagedFileState();
         refreshExternalIntegrations();
 
         Bukkit.getPluginManager().registerEvents(this, this);
@@ -139,13 +144,23 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onSignCreate(SignChangeEvent event) {
-        String firstLine = event.getLine(0);
-        if (!"[Protect]".equalsIgnoreCase(firstLine)) {
+        Block signBlock = event.getBlock();
+        if (!(signBlock.getState() instanceof Sign sign)) {
             return;
         }
 
-        Block signBlock = event.getBlock();
-        if (!(signBlock.getState() instanceof Sign)) {
+        if (isProtect(sign)) {
+            event.setCancelled(true);
+            sendConfiguredMessage(event.getPlayer(), lang(
+                    "messages.sign_edit_denied",
+                    "&cYou cannot edit this protection sign."
+            ));
+            logDebug("access_denied", event.getPlayer().getName() + " denied sign edit at " + formatLoc(signBlock));
+            return;
+        }
+
+        String firstLine = event.getLine(0);
+        if (!"[Protect]".equalsIgnoreCase(firstLine)) {
             return;
         }
 
@@ -215,11 +230,24 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
 
     @EventHandler(ignoreCancelled = true)
     public void onOpen(PlayerInteractEvent event) {
-        if (event.getHand() != EquipmentSlot.HAND || event.getClickedBlock() == null) {
+        if (event.getHand() != EquipmentSlot.HAND
+                || event.getAction() != Action.RIGHT_CLICK_BLOCK
+                || event.getClickedBlock() == null) {
             return;
         }
 
-        Container container = getProtectableContainer(event.getClickedBlock());
+        Block clickedBlock = event.getClickedBlock();
+        if (clickedBlock.getState() instanceof Sign sign && isProtect(sign)) {
+            event.setCancelled(true);
+            sendConfiguredMessage(event.getPlayer(), lang(
+                    "messages.sign_edit_denied",
+                    "&cYou cannot edit this protection sign."
+            ));
+            logDebug("access_denied", event.getPlayer().getName() + " denied sign interact at " + formatLoc(clickedBlock));
+            return;
+        }
+
+        Container container = getProtectableContainer(clickedBlock);
         if (container == null) {
             return;
         }
@@ -258,7 +286,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         if (block.getState() instanceof Sign sign && isProtect(sign)) {
             String owner = sign.getPersistentDataContainer().get(ownerUuidKey, PersistentDataType.STRING);
             boolean canBreakProtection = owner != null
-                    && (player.getUniqueId().toString().equals(owner) || player.hasPermission("simplelock.admin"));
+                    && (player.getUniqueId().toString().equals(owner) || hasActiveAdminBypass(player));
             if (!canBreakProtection) {
                 event.setCancelled(true);
                 sendConfiguredMessage(player, lang("messages.sign_break_denied", "&cYou cannot break this protection sign."));
@@ -385,8 +413,8 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
 
         Bukkit.getScheduler().runTaskLater(this, () ->
                 {
-                    if (configOutdated) {
-                        sendOutdatedConfigMessage(player);
+                    if (managedFilesOutdated) {
+                        sendOutdatedFileMessage(player);
                     }
 
                     if (getConfig().getBoolean("update_checker.announce_to_admins", true)
@@ -400,6 +428,11 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
                 },
                 40L
         );
+    }
+
+    @EventHandler
+    public void onQuit(PlayerQuitEvent event) {
+        activeAdminBypassPlayers.remove(event.getPlayer().getUniqueId());
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -541,22 +574,22 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
 
     private boolean handleAdminSettingsRootClick(InventoryClickEvent event, Player player) {
         return switch (event.getRawSlot()) {
-            case 10 -> {
+            case 11 -> {
                 toggleBooleanSetting(player, "gui.enabled", "Whitelist GUI");
                 yield true;
             }
-            case 11 -> {
+            case 12 -> {
                 if (!event.isLeftClick() && !event.isRightClick()) {
                     yield false;
                 }
                 cycleMessageDisplayType(player, event.isLeftClick());
                 yield true;
             }
-            case 12 -> {
+            case 13 -> {
                 toggleBooleanSetting(player, "update_checker.enabled", "Update Checker");
                 yield true;
             }
-            case 13 -> {
+            case 14 -> {
                 toggleBooleanSetting(player, "update_checker.announce_to_admins", "Admin Update Notices");
                 yield true;
             }
@@ -568,15 +601,15 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
                 openAdminSettingsGui(player, AdminSettingsMenu.ECONOMY);
                 yield false;
             }
-            case 23 -> {
+            case 22 -> {
                 openAdminSettingsGui(player, AdminSettingsMenu.TOWNY);
                 yield false;
             }
-            case 24 -> {
+            case 23 -> {
                 openAdminSettingsGui(player, AdminSettingsMenu.GRIEFPREVENTION);
                 yield false;
             }
-            case 25 -> {
+            case 24 -> {
                 openAdminSettingsGui(player, AdminSettingsMenu.LANDS);
                 yield false;
             }
@@ -586,11 +619,11 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
 
     private boolean handleProtectionSettingsClick(InventoryClickEvent event, Player player) {
         return switch (event.getRawSlot()) {
-            case 20 -> {
+            case 21 -> {
                 toggleBooleanSetting(player, "protection.hopper_protection.enabled", "Hopper Protection");
                 yield true;
             }
-            case 24 -> {
+            case 23 -> {
                 toggleBooleanSetting(player, "protection.explosion_protection.enabled", "Explosion Protection");
                 yield true;
             }
@@ -641,11 +674,11 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
                 toggleBooleanSetting(player, "towny.mayor_bypass_break", "Mayor Break Bypass");
                 yield true;
             }
-            case 24 -> {
+            case 23 -> {
                 toggleBooleanSetting(player, "towny.nation_leader_bypass_open", "Nation Leader Open Bypass");
                 yield true;
             }
-            case 25 -> {
+            case 24 -> {
                 toggleBooleanSetting(player, "towny.nation_leader_bypass_break", "Nation Leader Break Bypass");
                 yield true;
             }
@@ -659,7 +692,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
 
     private boolean handleGriefPreventionSettingsClick(InventoryClickEvent event, Player player) {
         return switch (event.getRawSlot()) {
-            case 21 -> {
+            case 20 -> {
                 toggleBooleanSetting(player, "griefprevention.enabled", "GriefPrevention Integration");
                 yield true;
             }
@@ -667,7 +700,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
                 toggleBooleanSetting(player, "griefprevention.container_trust_bypass_open", "Claim Container Bypass");
                 yield true;
             }
-            case 23 -> {
+            case 24 -> {
                 toggleBooleanSetting(player, "griefprevention.build_trust_bypass_break", "Claim Break Bypass");
                 yield true;
             }
@@ -681,7 +714,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
 
     private boolean handleLandsSettingsClick(InventoryClickEvent event, Player player) {
         return switch (event.getRawSlot()) {
-            case 21 -> {
+            case 20 -> {
                 toggleBooleanSetting(player, "lands.enabled", "Lands Integration");
                 yield true;
             }
@@ -689,7 +722,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
                 toggleBooleanSetting(player, "lands.interact_container_bypass_open", "Land Container Bypass");
                 yield true;
             }
-            case 23 -> {
+            case 24 -> {
                 toggleBooleanSetting(player, "lands.block_break_bypass_break", "Land Break Bypass");
                 yield true;
             }
@@ -757,6 +790,16 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
             return true;
         }
 
+        if (args[0].equalsIgnoreCase("adminbypass")) {
+            if (!(sender instanceof Player player)) {
+                sendCommandMessage(sender, lang("messages.player_only", "&cPlayer only."));
+                return true;
+            }
+
+            handleAdminBypassCommand(player, args);
+            return true;
+        }
+
         if (args[0].equalsIgnoreCase("forceunprotect")) {
             if (!(sender instanceof Player player)) {
                 sendCommandMessage(sender, lang("messages.player_only", "&cPlayer only."));
@@ -775,12 +818,12 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
 
             reloadConfig();
             reloadLangConfig();
-            refreshConfigVersionState();
+            refreshManagedFileState();
             refreshExternalIntegrations();
             refreshUpdateChecker();
-            sendCommandMessage(sender, lang("messages.config_reloaded", "&aSimpleLock config reloaded."));
-            if (configOutdated && sender instanceof Player player) {
-                sendOutdatedConfigMessage(player);
+            sendCommandMessage(sender, lang("messages.config_reloaded", "&aSimpleLock config and language files reloaded."));
+            if (managedFilesOutdated && sender instanceof Player player) {
+                sendOutdatedFileMessage(player);
             }
             return true;
         }
@@ -791,7 +834,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
                 return true;
             }
 
-            updateConfigFile(sender);
+            updateManagedFiles(sender);
             return true;
         }
 
@@ -918,6 +961,38 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
                 String.valueOf(signCount)
         ));
         logDebug("protection_cleanup", player.getName() + " force-unprotected " + ownerName + "'s container at " + formatLoc(container.getBlock()));
+    }
+
+    private void handleAdminBypassCommand(Player player, String[] args) {
+        if (!player.hasPermission("simplelock.admin")) {
+            sendConfiguredMessage(player, lang("messages.no_permission", "&cYou do not have permission."));
+            return;
+        }
+
+        if (args.length == 1) {
+            setAdminBypassEnabled(player, !hasActiveAdminBypass(player));
+            return;
+        }
+
+        switch (args[1].toLowerCase(Locale.ROOT)) {
+            case "on" -> setAdminBypassEnabled(player, true);
+            case "off" -> setAdminBypassEnabled(player, false);
+            case "status" -> sendConfiguredMessage(
+                    player,
+                    lang(
+                            hasActiveAdminBypass(player)
+                                    ? "messages.admin_bypass_status_enabled"
+                                    : "messages.admin_bypass_status_disabled",
+                            hasActiveAdminBypass(player)
+                                    ? "&eAdmin bypass is currently &aenabled&e."
+                                    : "&eAdmin bypass is currently &cdisabled&e."
+                    )
+            );
+            default -> sendConfiguredMessage(player, lang(
+                    "messages.admin_bypass_usage",
+                    "&eUse &6/simplelock adminbypass [on|off|status]&e."
+            ));
+        }
     }
 
     private void handleTransferCommand(Player player, String[] args) {
@@ -1285,16 +1360,16 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
     private void populateAdminSettingsRoot(Inventory inventory) {
         setToggleItem(
                 inventory,
-                10,
+                11,
                 Material.CHEST,
                 "Whitelist GUI",
                 getConfig().getBoolean("gui.enabled", true),
                 "Allows /simplelock whitelist for protected container owners."
         );
-        inventory.setItem(11, createDisplayTypeItem());
+        inventory.setItem(12, createDisplayTypeItem());
         setToggleItem(
                 inventory,
-                12,
+                13,
                 Material.COMPASS,
                 "Update Checker",
                 getConfig().getBoolean("update_checker.enabled", true),
@@ -1302,7 +1377,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         );
         setToggleItem(
                 inventory,
-                13,
+                14,
                 Material.BELL,
                 "Admin Update Notices",
                 getConfig().getBoolean("update_checker.announce_to_admins", true),
@@ -1329,7 +1404,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         );
         setSubmenuItem(
                 inventory,
-                23,
+                22,
                 Material.MAP,
                 "Towny Settings",
                 formatStatusLine("Integration", getConfig().getBoolean("towny.enabled", false)),
@@ -1338,7 +1413,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         );
         setSubmenuItem(
                 inventory,
-                24,
+                23,
                 Material.GOLDEN_SHOVEL,
                 "GriefPrevention Settings",
                 formatStatusLine("Integration", getConfig().getBoolean("griefprevention.enabled", false)),
@@ -1347,7 +1422,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         );
         setSubmenuItem(
                 inventory,
-                25,
+                24,
                 Material.GRASS_BLOCK,
                 "Lands Settings",
                 formatStatusLine("Integration", getConfig().getBoolean("lands.enabled", false)),
@@ -1359,7 +1434,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
     private void populateProtectionSettingsMenu(Inventory inventory) {
         setToggleItem(
                 inventory,
-                20,
+                21,
                 Material.HOPPER,
                 "Hopper Protection",
                 getConfig().getBoolean("protection.hopper_protection.enabled", true),
@@ -1367,7 +1442,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         );
         setToggleItem(
                 inventory,
-                24,
+                23,
                 Material.TNT,
                 "Explosion Protection",
                 getConfig().getBoolean("protection.explosion_protection.enabled", false),
@@ -1424,7 +1499,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         );
         setToggleItem(
                 inventory,
-                24,
+                23,
                 Material.DIAMOND,
                 "Nation Leader Open Bypass",
                 getConfig().getBoolean("towny.nation_leader_bypass_open", false),
@@ -1432,7 +1507,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         );
         setToggleItem(
                 inventory,
-                25,
+                24,
                 Material.DIAMOND_PICKAXE,
                 "Nation Leader Break Bypass",
                 getConfig().getBoolean("towny.nation_leader_bypass_break", false),
@@ -1444,7 +1519,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
     private void populateGriefPreventionSettingsMenu(Inventory inventory) {
         setToggleItem(
                 inventory,
-                21,
+                20,
                 Material.GOLDEN_SHOVEL,
                 "GriefPrevention Integration",
                 getConfig().getBoolean("griefprevention.enabled", false),
@@ -1460,7 +1535,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         );
         setToggleItem(
                 inventory,
-                23,
+                24,
                 Material.IRON_PICKAXE,
                 "Claim Break Bypass",
                 getConfig().getBoolean("griefprevention.build_trust_bypass_break", false),
@@ -1472,7 +1547,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
     private void populateLandsSettingsMenu(Inventory inventory) {
         setToggleItem(
                 inventory,
-                21,
+                20,
                 Material.GRASS_BLOCK,
                 "Lands Integration",
                 getConfig().getBoolean("lands.enabled", false),
@@ -1488,7 +1563,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         );
         setToggleItem(
                 inventory,
-                23,
+                24,
                 Material.DIAMOND_PICKAXE,
                 "Land Break Bypass",
                 getConfig().getBoolean("lands.block_break_bypass_break", false),
@@ -1639,6 +1714,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
             completions.add("transfer");
             completions.add("info");
             if (sender.hasPermission("simplelock.admin")) {
+                completions.add("adminbypass");
                 completions.add("forceunprotect");
             }
             if (sender.hasPermission("simplelock.settings") || sender.hasPermission("simplelock.admin")) {
@@ -1659,6 +1735,10 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
 
             if (args[0].equalsIgnoreCase("transfer")) {
                 return filterCompletions(getKnownPlayerNames(), args[1]);
+            }
+
+            if (args[0].equalsIgnoreCase("adminbypass") && sender.hasPermission("simplelock.admin")) {
+                return filterCompletions(List.of("on", "off", "status"), args[1]);
             }
         }
 
@@ -1751,7 +1831,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
     }
 
     private boolean isNotWhitelistOwner(Player player, Container container) {
-        if (player.hasPermission("simplelock.admin")) {
+        if (hasActiveAdminBypass(player)) {
             return false;
         }
 
@@ -2038,7 +2118,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
     }
 
     private boolean canAccess(Player player, Container container, ProtectionData data, boolean open) {
-        if (player.hasPermission("simplelock.admin")) {
+        if (hasActiveAdminBypass(player)) {
             logDebug("bypass_use", player.getName() + " used admin bypass at " + formatLoc(container.getBlock()));
             return true;
         }
@@ -2054,6 +2134,29 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         return open
                 ? hasOpenBypass(player, container)
                 : hasBreakBypass(player, container);
+    }
+
+    private boolean hasActiveAdminBypass(Player player) {
+        return player.hasPermission("simplelock.admin") && activeAdminBypassPlayers.contains(player.getUniqueId());
+    }
+
+    private void setAdminBypassEnabled(Player player, boolean enabled) {
+        if (enabled) {
+            activeAdminBypassPlayers.add(player.getUniqueId());
+            sendConfiguredMessage(player, lang(
+                    "messages.admin_bypass_enabled",
+                    "&aAdmin bypass enabled."
+            ));
+            logDebug("bypass_use", player.getName() + " enabled admin bypass.");
+            return;
+        }
+
+        activeAdminBypassPlayers.remove(player.getUniqueId());
+        sendConfiguredMessage(player, lang(
+                "messages.admin_bypass_disabled",
+                "&cAdmin bypass disabled."
+        ));
+        logDebug("bypass_use", player.getName() + " disabled admin bypass.");
     }
 
     private boolean hasOpenBypass(Player player, Container container) {
@@ -2378,15 +2481,23 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         }
     }
 
-    private void refreshConfigVersionState() {
+    private void refreshManagedFileState() {
         YamlConfiguration bundledConfig = loadBundledConfig();
+        YamlConfiguration bundledLang = loadBundledLangConfig();
+        FileConfiguration currentLangConfig = langConfig == null ? new YamlConfiguration() : langConfig;
         loadedConfigVersion = getConfig().getDouble("config_version", 0.0);
-        missingConfigPaths = findMissingConfigPaths(bundledConfig, getConfig());
-        obsoleteConfigPaths = findObsoleteConfigPaths(bundledConfig, getConfig());
+        missingConfigPaths = findMissingPaths(bundledConfig, getConfig());
+        obsoleteConfigPaths = findObsoletePaths(bundledConfig, getConfig());
+        missingLangPaths = findMissingPaths(bundledLang, currentLangConfig);
+        obsoleteLangPaths = findObsoletePaths(bundledLang, currentLangConfig);
         boolean versionOutdated = loadedConfigVersion < CONFIG_VERSION;
-        configOutdated = versionOutdated || !missingConfigPaths.isEmpty() || !obsoleteConfigPaths.isEmpty();
+        managedFilesOutdated = versionOutdated
+                || !missingConfigPaths.isEmpty()
+                || !obsoleteConfigPaths.isEmpty()
+                || !missingLangPaths.isEmpty()
+                || !obsoleteLangPaths.isEmpty();
 
-        if (configOutdated) {
+        if (managedFilesOutdated) {
             if (versionOutdated) {
                 log("Config file is outdated. Expected config_version "
                         + formatConfigVersion(CONFIG_VERSION) + " but found " + formatConfigVersion(loadedConfigVersion)
@@ -2400,7 +2511,15 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
                 log("Obsolete config paths (" + obsoleteConfigPaths.size() + "):");
                 obsoleteConfigPaths.forEach(path -> log(" - " + path));
             }
-            log("Use /simplelock updateconfig to back up, merge missing default settings, and remove obsolete keys.");
+            if (!missingLangPaths.isEmpty()) {
+                log("Missing lang paths (" + missingLangPaths.size() + "):");
+                missingLangPaths.forEach(path -> log(" - " + path));
+            }
+            if (!obsoleteLangPaths.isEmpty()) {
+                log("Obsolete lang paths (" + obsoleteLangPaths.size() + "):");
+                obsoleteLangPaths.forEach(path -> log(" - " + path));
+            }
+            log("Use /simplelock updateconfig to back up, merge missing default settings, and remove obsolete keys in config.yml and lang.yml.");
         }
     }
 
@@ -2413,7 +2532,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         return player.hasPermission("simplelock.admin") || player.isOp();
     }
 
-    private void sendOutdatedConfigMessage(Player player) {
+    private void sendOutdatedFileMessage(Player player) {
         if (loadedConfigVersion < CONFIG_VERSION) {
             String message = lang(
                     "messages.config_outdated_admin",
@@ -2443,9 +2562,25 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
             sendChatMessage(player, format(obsoleteMessage, "paths", summarizeObsoleteConfigPaths()));
         }
 
+        if (!missingLangPaths.isEmpty()) {
+            String missingLangMessage = lang(
+                    "messages.lang_missing_paths_admin",
+                    "&eMissing lang paths: &6%paths%"
+            );
+            sendChatMessage(player, format(missingLangMessage, "paths", summarizeMissingLangPaths()));
+        }
+
+        if (!obsoleteLangPaths.isEmpty()) {
+            String obsoleteLangMessage = lang(
+                    "messages.lang_obsolete_paths_admin",
+                    "&eObsolete lang paths: &6%paths%"
+            );
+            sendChatMessage(player, format(obsoleteLangMessage, "paths", summarizeObsoleteLangPaths()));
+        }
+
         sendChatMessage(player, lang(
                 "messages.config_update_hint",
-                "&eUse &6/simplelock updateconfig &eto back up your current config, merge missing defaults, and remove obsolete keys."
+                "&eUse &6/simplelock updateconfig &eto back up your current config and language files, merge missing defaults, and remove obsolete keys."
         ));
     }
 
@@ -2472,74 +2607,160 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         sendSettingUpdate(player, settingName, updated ? "Enabled" : "Disabled");
     }
 
-    private void updateConfigFile(CommandSender sender) {
-        YamlConfiguration bundledConfig = loadBundledConfig();
-        List<String> missingBeforeUpdate = findMissingConfigPaths(bundledConfig, getConfig());
-        List<String> obsoleteBeforeUpdate = findObsoleteConfigPaths(bundledConfig, getConfig());
-        boolean versionNeedsUpdate = loadedConfigVersion < CONFIG_VERSION;
+    private void updateManagedFiles(CommandSender sender) {
+        String backupTimestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+        List<YamlUpdateResult> updatedFiles = new ArrayList<>();
+        List<String> failedFiles = new ArrayList<>();
 
-        if (missingBeforeUpdate.isEmpty() && obsoleteBeforeUpdate.isEmpty() && !versionNeedsUpdate) {
+        updateManagedFile("config.yml", loadBundledConfig(), "config_version", CONFIG_VERSION, backupTimestamp, updatedFiles, failedFiles);
+        updateManagedFile("lang.yml", loadBundledLangConfig(), null, null, backupTimestamp, updatedFiles, failedFiles);
+
+        if (updatedFiles.isEmpty() && failedFiles.isEmpty()) {
             sendCommandMessage(sender, lang(
-                    "messages.config_update_no_changes",
-                    "&aConfig is already up to date."
+                    "messages.config_update_all_no_changes",
+                    "&aConfig and language files are already up to date."
             ));
             return;
         }
 
-        Path configPath = getDataFolder().toPath().resolve("config.yml");
-        String backupName = "config.backup-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".yml";
-        Path backupPath = configPath.resolveSibling(backupName);
+        reloadConfig();
+        reloadLangConfig();
+        refreshManagedFileState();
+        refreshExternalIntegrations();
+        refreshUpdateChecker();
 
-        try {
-            Files.copy(configPath, backupPath, StandardCopyOption.REPLACE_EXISTING);
-
-            for (String path : missingBeforeUpdate) {
-                getConfig().set(path, bundledConfig.get(path));
-            }
-
-            for (String path : obsoleteBeforeUpdate) {
-                getConfig().set(path, null);
-            }
-
-            getConfig().set("config_version", CONFIG_VERSION);
-            saveConfig();
-            reloadConfig();
-            reloadLangConfig();
-            refreshConfigVersionState();
-            refreshExternalIntegrations();
-            refreshUpdateChecker();
-
+        if (!updatedFiles.isEmpty()) {
             String success = lang(
-                    "messages.config_update_success",
-                    "&aConfig updated. Backup created at &e%backup%&a. Added &e%added% &amissing setting(s) and removed &e%removed% &aobsolete setting(s)."
+                    "messages.config_update_all_success",
+                    "&aUpdated &e%count% &afile(s): &e%files%&a."
             );
-            success = format(success, "backup", backupPath.getFileName().toString());
-            success = format(success, "added", String.valueOf(missingBeforeUpdate.size()));
-            success = format(success, "removed", String.valueOf(obsoleteBeforeUpdate.size()));
+            success = format(success, "count", String.valueOf(updatedFiles.size()));
+            success = format(
+                    success,
+                    "files",
+                    updatedFiles.stream().map(YamlUpdateResult::fileName).collect(Collectors.joining(", "))
+            );
             sendCommandMessage(sender, success);
 
-            if (!missingBeforeUpdate.isEmpty()) {
-                String merged = lang(
-                        "messages.config_update_added_paths",
-                        "&eMerged paths: &6%paths%"
-                );
-                sendCommandMessage(sender, format(merged, "paths", summarizePaths(missingBeforeUpdate, 6)));
+            for (YamlUpdateResult result : updatedFiles) {
+                sendUpdatedFileSummary(sender, result);
             }
+        }
 
-            if (!obsoleteBeforeUpdate.isEmpty()) {
-                String removed = lang(
-                        "messages.config_update_removed_paths",
-                        "&eRemoved obsolete paths: &6%paths%"
-                );
-                sendCommandMessage(sender, format(removed, "paths", summarizePaths(obsoleteBeforeUpdate, 6)));
+        if (!failedFiles.isEmpty()) {
+            String failed = lang(
+                    "messages.config_update_all_failed",
+                    "&cFailed to update: &e%files%&c. Check console for details."
+            );
+            sendCommandMessage(sender, format(failed, "files", String.join(", ", failedFiles)));
+        }
+    }
+
+    private void updateManagedFile(String fileName,
+                                   YamlConfiguration bundledConfig,
+                                   String versionPath,
+                                   Double expectedVersion,
+                                   String backupTimestamp,
+                                   List<YamlUpdateResult> updatedFiles,
+                                   List<String> failedFiles) {
+        try {
+            YamlUpdateResult result = updateYamlFile(fileName, bundledConfig, versionPath, expectedVersion, backupTimestamp);
+            if (result != null) {
+                updatedFiles.add(result);
             }
         } catch (IOException exception) {
-            log("Config update failed: " + exception.getMessage());
-            sendCommandMessage(sender, lang(
-                    "messages.config_update_failed",
-                    "&cConfig update failed. Check console for details."
-            ));
+            getLogger().warning("Failed to update " + fileName + ": " + exception.getMessage());
+            failedFiles.add(fileName);
         }
+    }
+
+    private YamlUpdateResult updateYamlFile(String fileName,
+                                            YamlConfiguration bundledConfig,
+                                            String versionPath,
+                                            Double expectedVersion,
+                                            String backupTimestamp) throws IOException {
+        Path filePath = getDataFolder().toPath().resolve(fileName);
+        YamlConfiguration currentConfig = YamlConfiguration.loadConfiguration(filePath.toFile());
+        List<String> missingBeforeUpdate = findMissingPaths(bundledConfig, currentConfig);
+        List<String> obsoleteBeforeUpdate = findObsoletePaths(bundledConfig, currentConfig);
+        boolean versionNeedsUpdate = versionPath != null
+                && expectedVersion != null
+                && currentConfig.getDouble(versionPath, 0.0) < expectedVersion;
+
+        if (missingBeforeUpdate.isEmpty() && obsoleteBeforeUpdate.isEmpty() && !versionNeedsUpdate) {
+            return null;
+        }
+
+        String backupFileName = "";
+        if (Files.exists(filePath)) {
+            Path backupDirectory = getBackupDirectory();
+            Files.createDirectories(backupDirectory);
+            backupFileName = "backups/" + buildBackupFileName(fileName, backupTimestamp);
+            Files.copy(filePath, backupDirectory.resolve(buildBackupFileName(fileName, backupTimestamp)), StandardCopyOption.REPLACE_EXISTING);
+        }
+
+        for (String path : missingBeforeUpdate) {
+            currentConfig.set(path, bundledConfig.get(path));
+        }
+
+        for (String path : obsoleteBeforeUpdate) {
+            currentConfig.set(path, null);
+        }
+
+        if (versionNeedsUpdate) {
+            currentConfig.set(versionPath, expectedVersion);
+        }
+
+        currentConfig.save(filePath.toFile());
+        return new YamlUpdateResult(fileName, backupFileName, missingBeforeUpdate, obsoleteBeforeUpdate);
+    }
+
+    private void sendUpdatedFileSummary(CommandSender sender, YamlUpdateResult result) {
+        String summary = lang(
+                "messages.config_update_file_summary",
+                "&e%file%&f -> backup: &6%backup%&f, added: &6%added%&f, removed: &6%removed%"
+        );
+        summary = format(summary, "file", result.fileName());
+        summary = format(summary, "backup", result.backupLabel());
+        summary = format(summary, "added", String.valueOf(result.addedCount()));
+        summary = format(summary, "removed", String.valueOf(result.removedCount()));
+        sendCommandMessage(sender, summary);
+
+        if (!result.missingPaths().isEmpty()) {
+            String merged = lang(
+                    "messages.config_update_file_added_paths",
+                    "&e%file% merged paths: &6%paths%"
+            );
+            merged = format(merged, "file", result.fileName());
+            merged = format(merged, "paths", summarizePaths(result.missingPaths(), 6));
+            sendCommandMessage(sender, merged);
+        }
+
+        if (!result.obsoletePaths().isEmpty()) {
+            String removed = lang(
+                    "messages.config_update_file_removed_paths",
+                    "&e%file% removed obsolete paths: &6%paths%"
+            );
+            removed = format(removed, "file", result.fileName());
+            removed = format(removed, "paths", summarizePaths(result.obsoletePaths(), 6));
+            sendCommandMessage(sender, removed);
+        }
+    }
+
+    private String buildBackupFileName(String fileName, String backupTimestamp) {
+        int extensionIndex = fileName.lastIndexOf('.');
+        if (extensionIndex < 0) {
+            return fileName + ".backup-" + backupTimestamp;
+        }
+
+        return fileName.substring(0, extensionIndex)
+                + ".backup-"
+                + backupTimestamp
+                + fileName.substring(extensionIndex);
+    }
+
+    private Path getBackupDirectory() {
+        return getDataFolder().toPath().resolve("backups");
     }
 
     private void cycleMessageDisplayType(Player player, boolean forward) {
@@ -2698,7 +2919,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         }
     }
 
-    private List<String> findMissingConfigPaths(FileConfiguration bundledConfig, FileConfiguration currentConfig) {
+    private List<String> findMissingPaths(FileConfiguration bundledConfig, FileConfiguration currentConfig) {
         List<String> missingPaths = new ArrayList<>();
 
         for (String path : bundledConfig.getKeys(true)) {
@@ -2715,7 +2936,7 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
         return missingPaths;
     }
 
-    private List<String> findObsoleteConfigPaths(FileConfiguration bundledConfig, FileConfiguration currentConfig) {
+    private List<String> findObsoletePaths(FileConfiguration bundledConfig, FileConfiguration currentConfig) {
         List<String> currentPaths = new ArrayList<>(currentConfig.getKeys(true));
         currentPaths.removeIf(String::isBlank);
         currentPaths.sort(Comparator
@@ -2735,11 +2956,19 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
     }
 
     private String summarizeMissingConfigPaths() {
-        return summarizePaths(missingConfigPaths, ADMIN_CONFIG_PATH_SUMMARY_LIMIT);
+        return summarizePaths(missingConfigPaths, ADMIN_FILE_PATH_SUMMARY_LIMIT);
     }
 
     private String summarizeObsoleteConfigPaths() {
-        return summarizePaths(obsoleteConfigPaths, ADMIN_CONFIG_PATH_SUMMARY_LIMIT);
+        return summarizePaths(obsoleteConfigPaths, ADMIN_FILE_PATH_SUMMARY_LIMIT);
+    }
+
+    private String summarizeMissingLangPaths() {
+        return summarizePaths(missingLangPaths, ADMIN_FILE_PATH_SUMMARY_LIMIT);
+    }
+
+    private String summarizeObsoleteLangPaths() {
+        return summarizePaths(obsoleteLangPaths, ADMIN_FILE_PATH_SUMMARY_LIMIT);
     }
 
     private String summarizePaths(List<String> paths, int limit) {
@@ -2829,6 +3058,23 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
 
     private String formatLoc(Block block) {
         return block.getWorld().getName() + " x=" + block.getX() + " y=" + block.getY() + " z=" + block.getZ();
+    }
+
+    private record YamlUpdateResult(String fileName,
+                                    String backupFileName,
+                                    List<String> missingPaths,
+                                    List<String> obsoletePaths) {
+        private String backupLabel() {
+            return backupFileName.isBlank() ? "new file created" : backupFileName;
+        }
+
+        private int addedCount() {
+            return missingPaths.size();
+        }
+
+        private int removedCount() {
+            return obsoletePaths.size();
+        }
     }
 
     private record ProtectionData(String uuid, String name, Set<UUID> trustedPlayers) {
