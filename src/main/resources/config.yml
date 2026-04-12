@@ -1,21 +1,39 @@
+config_version: 1.0
+
 messages:
   display_type: chat # chat, action_bar, bossbar, none
 
   chest_attach_denied: "&cYou cannot attach a chest to someone else's protected chest."
-  chest_protected: "&aChest protected."
-  chest_denied: "&cThis chest is protected."
+  chest_protected: "&aContainer protected."
+  chest_denied: "&cThis container is protected."
   sign_denied: "&cYou cannot edit this protection sign."
-  chest_break_denied: "&cYou cannot break this protected chest."
+  chest_break_denied: "&cYou cannot break this protected container."
   sign_break_denied: "&cYou cannot break this protection sign."
-  chest_unprotected: "&aChest unprotected."
-  gui_no_target: "&cLook at a protected chest first."
-  gui_not_owner: "&cYou must own this protected chest to manage its whitelist."
+  chest_unprotected: "&aContainer unprotected."
+  gui_no_target: "&cLook at a protected chest or barrel first."
+  gui_not_owner: "&cYou must own this protected container to manage its whitelist."
   gui_player_added: "&aAdded &e%player% &ato the whitelist."
   gui_player_removed: "&cRemoved &e%player% &cfrom the whitelist."
+  whitelist_usage: "&eUse &6/simplelock whitelist&e, &6/simplelock whitelist add <player>&e, or &6/simplelock whitelist remove <player>&e."
+  whitelist_owner_target: "&cYou cannot modify whitelist access for the owner."
+  whitelist_already_added: "&e%player% &cis already on the whitelist."
+  whitelist_not_added: "&e%player% &cis not on the whitelist."
+  player_not_found: "&cPlayer &e%player% &cwas not found."
+  transfer_usage: "&eUse &6/simplelock transfer <player> &ewhile looking at a protected container."
+  transfer_same_owner: "&e%player% &calready owns this protected container."
+  transfer_success: "&aTransferred protection to &e%player%&a."
   no_permission: "&cYou do not have permission."
   config_reloaded: "&aSimpleLock config reloaded."
-  economy_not_enough: "&cYou need &6$%amount% &cto protect this chest."
-  economy_paid: "&aYou paid &6$%amount% &ato protect this chest."
+  config_outdated_admin: "&eSimpleLock config is outdated. Expected config_version &6%expected%&e but found &6%current%&e."
+  config_missing_paths_admin: "&eMissing config paths: &6%paths%"
+  config_update_hint: "&eUse &6/simplelock updateconfig &eto back up your current config and merge missing default settings."
+  config_update_no_changes: "&aConfig is already up to date."
+  config_update_success: "&aConfig updated. Backup created at &e%backup%&a. Added &e%count% &amissing setting(s)."
+  config_update_added_paths: "&eMerged paths: &6%paths%"
+  config_update_failed: "&cConfig update failed. Check console for details."
+  setting_updated: "&aUpdated &e%setting% &ato &e%value%&a."
+  economy_not_enough: "&cYou need &6$%amount% &cto protect this container."
+  economy_paid: "&aYou paid &6$%amount% &ato protect this container."
 
 logging:
   debug:
@@ -23,6 +41,8 @@ logging:
     access_denied: false
     bypass_use: false
     trust_changes: false
+    ownership_transfers: false
+    protection_cleanup: false
     hopper_denied: false
     explosions: false
     economy: false
@@ -50,6 +70,7 @@ economy:
 gui:
   enabled: true
   whitelist_title: "&8Whitelist Players"
+  admin_title: "&8SimpleLock Settings"
 
 update_checker:
   enabled: true
