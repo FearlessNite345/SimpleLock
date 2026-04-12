@@ -1,5 +1,5 @@
 name: SimpleLock
-version: 1.1.0
+version: 1.1.1
 description: Container protection plugin for Spigot, Paper, and Purpur servers
 main: me.fearlessstudios.simplelock.SimpleLockPlugin
 api-version: '1.21'

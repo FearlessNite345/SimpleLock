@@ -544,7 +544,12 @@ public final class SimpleLockPlugin extends JavaPlugin implements Listener, Comm
             return;
         }
 
-        refreshWhitelistGui(event.getInventory(), player, container);
+        Container refreshedContainer = getProtectableContainer(container.getBlock());
+        refreshWhitelistGui(
+                event.getInventory(),
+                player,
+                refreshedContainer != null ? refreshedContainer : container
+        );
     }
 
     private void handleAdminSettingsGuiClick(InventoryClickEvent event, Player player, AdminSettingsGuiHolder guiHolder) {
